@@ -1,4 +1,5 @@
 ﻿using Mono.Options;
+using ProcPerfMon.Nvidia;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -9,7 +10,71 @@ namespace ProcPerfMon
 {
     public class Program
     {
-		static void ShowUsage(OptionSet optionSet)
+        static internal NvidiaGPU GetPrimaryGPU()
+        {
+            if (!NVAPI.IsAvailable)
+            {
+                throw new Exception("Unable to obtain primary GPU; NVAPI is not available");
+            }
+
+            NvPhysicalGpuHandle[] handles = new NvPhysicalGpuHandle[NVAPI.MAX_PHYSICAL_GPUS];
+
+            int numGpus;
+            if (NVAPI.NvAPI_EnumPhysicalGPUs == null)
+            {
+                throw new Exception("Unable to obtain primary GPU; NvAPI_EnumPhysicalGPUs not available");
+            }
+            else
+            {
+                NvStatus status = NVAPI.NvAPI_EnumPhysicalGPUs(handles, out numGpus);
+                if (status != NvStatus.OK)
+                {
+                    throw new Exception("Unable to obtain primary GPU");
+                }
+            }
+
+            IDictionary<NvPhysicalGpuHandle, NvDisplayHandle> displayHandles = new Dictionary<NvPhysicalGpuHandle, NvDisplayHandle>();
+
+            if (NVAPI.NvAPI_EnumNvidiaDisplayHandle != null && NVAPI.NvAPI_GetPhysicalGPUsFromDisplay != null)
+            {
+                NvStatus status = NvStatus.OK;
+                int i = 0;
+                while (status == NvStatus.OK)
+                {
+                    NvDisplayHandle dispHandle = new NvDisplayHandle();
+                    status = NVAPI.NvAPI_EnumNvidiaDisplayHandle(i, ref dispHandle);
+                    i++;
+
+                    if (status == NvStatus.OK)
+                    {
+                        uint countFromDisplay;
+                        NvPhysicalGpuHandle[] handlesFromDisplay = new NvPhysicalGpuHandle[NVAPI.MAX_PHYSICAL_GPUS];
+                        if (NVAPI.NvAPI_GetPhysicalGPUsFromDisplay(dispHandle, handlesFromDisplay, out countFromDisplay) == NvStatus.OK)
+                        {
+                            for (int j = 0; j < countFromDisplay; j++)
+                            {
+                                if (!displayHandles.ContainsKey(handlesFromDisplay[j]))
+                                {
+                                    displayHandles.Add(handlesFromDisplay[j], dispHandle);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (numGpus < 1)
+            {
+                throw new Exception("Unable to obtain primary GPU");
+            }
+
+            NvDisplayHandle displayHandle;
+            displayHandles.TryGetValue(handles[0], out displayHandle);
+            return new NvidiaGPU(0, handles[0], displayHandle);
+        }
+
+
+        static void ShowUsage(OptionSet optionSet)
         {
             Console.WriteLine("Usage: ProcPerfMon [OPTIONS]+ process");
             Console.WriteLine("Run performance monitor on specified process.");
@@ -21,10 +86,10 @@ namespace ProcPerfMon
 
         static void Main(string[] args)
         {
-			// Obtain "Process" performance counter category (since this is slow it is done at startup)
-			PerformanceCounterCategory processCategory = PerformanceCounterCategory.GetCategories().FirstOrDefault(x => x.CategoryName == "Process");
+            // Obtain "Process" performance counter category (since this is slow it is done at startup)
+            //List<PerformanceCounterCategory> categories = PerformanceCounterCategory.GetCategories().ToList();
 
-			int logDuration = 60;
+            int logDuration = 60;
 			bool showHelp = false;
 			string processName = "devenv";
 			string logFile = DateTime.Now.ToString($"{processName}-yyyyMMdd_HHmmss");
@@ -79,7 +144,17 @@ namespace ProcPerfMon
 			// Allow user to select process from list if no process name was given
 			int selection = 0;
 			Process targetProcess;
-			List<Process> processes = Process.GetProcesses().Where(p => p.MainWindowTitle.Length > 0).OrderBy(p => p.ProcessName).ToList();
+
+            List<Process> processes = new List<Process>();
+            foreach (Process process in Process.GetProcesses().Where(p => p.MainWindowTitle.Length > 0).OrderBy(p => p.ProcessName).ToList())
+            {
+                try
+                {
+                    ProcessModule processModule = process.MainModule;
+                    processes.Add(process);
+                }
+                catch (Exception) { }
+            }
 
 			if (nonOptionalArgs.Count == 0)
 			{
@@ -87,7 +162,11 @@ namespace ProcPerfMon
 
 				for (i = 0; i < processes.Count; ++i)
 				{
-					Console.WriteLine("[{0,2}]  {1,-12}  {2,32}", i+1, processes[i].ProcessName, processes[i].MainModule.FileName);
+                    try
+                    {
+                        Console.WriteLine("[{0,2}]  {1,-12}  {2,32}", i + 1, processes[i].ProcessName, processes[i].MainModule.FileName);
+                    }
+                    catch (Exception) {}
 				}
 
 				ConsoleKeyInfo cki = Console.ReadKey(true);
@@ -158,21 +237,25 @@ namespace ProcPerfMon
 
 			targetProcess = matchingProcesses[selection];
 
-			// Obtain CPU and RAM usage performance counters for target process
-            PerformanceCounter ramCounter = new PerformanceCounter("Process", "Working Set", targetProcess.ProcessName);
+            // Obtain CPU and RAM usage performance counters for target process
             PerformanceCounter cpuCounter = new PerformanceCounter("Process", "% Processor Time", targetProcess.ProcessName);
+            PerformanceCounter ramCounter = new PerformanceCounter("Process", "Working Set", targetProcess.ProcessName);
 
-            DisplayCounter(new PerformanceCounter[]{ ramCounter, cpuCounter });
-        }
+            // Get GPU performance data
+            NvidiaGPU gpuCounter = GetPrimaryGPU();
 
-        private static void DisplayCounter(PerformanceCounter[] counters)
-        {
             while (!Console.KeyAvailable)
             {
-                foreach (PerformanceCounter counter in counters)
-                {
-                    Console.WriteLine($"{counter.CategoryName}\t{counter.CounterName} = {counter.NextValue()}");
-                }
+                float cpuCounterValue = cpuCounter.NextValue();
+                float ramCounterValue = ramCounter.NextValue();
+
+                gpuCounter.Update();
+
+                Console.WriteLine("{0:16}  {1:##0.000}", "GPU Load", cpuCounterValue);
+                Console.WriteLine("{0:16}  {1:##0.000}", "RAM Load", ramCounterValue);
+                Console.WriteLine("{0:16}  {1:##0.000}", gpuCounter.CoreLoad.Name, gpuCounter.CoreLoad.Value);
+                Console.WriteLine("{0:16}  {1:##0.000}", gpuCounter.VideoEngineLoad.Name, gpuCounter.VideoEngineLoad.Value);
+                Console.WriteLine("{0:16}  {1:##0.000}", gpuCounter.MemoryLoad.Name, gpuCounter.MemoryLoad.Value);
 
                 System.Threading.Thread.Sleep(200);
             }
