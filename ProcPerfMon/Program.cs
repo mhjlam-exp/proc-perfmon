@@ -5,83 +5,15 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 
 namespace ProcPerfMon
 {
     public class Program
     {
-        static internal NvidiaGPU GetPrimaryGPU()
-        {
-            if (!NVAPI.IsAvailable)
-            {
-                throw new Exception("Unable to obtain primary GPU; NVAPI is not available");
-            }
-
-            NvPhysicalGpuHandle[] handles = new NvPhysicalGpuHandle[NVAPI.MAX_PHYSICAL_GPUS];
-
-            int numGpus;
-            if (NVAPI.NvAPI_EnumPhysicalGPUs == null)
-            {
-                throw new Exception("Unable to obtain primary GPU; NvAPI_EnumPhysicalGPUs not available");
-            }
-            else
-            {
-                NvStatus status = NVAPI.NvAPI_EnumPhysicalGPUs(handles, out numGpus);
-                if (status != NvStatus.OK)
-                {
-                    throw new Exception("Unable to obtain primary GPU");
-                }
-            }
-
-            IDictionary<NvPhysicalGpuHandle, NvDisplayHandle> displayHandles = new Dictionary<NvPhysicalGpuHandle, NvDisplayHandle>();
-
-            if (NVAPI.NvAPI_EnumNvidiaDisplayHandle != null && NVAPI.NvAPI_GetPhysicalGPUsFromDisplay != null)
-            {
-                NvStatus status = NvStatus.OK;
-                int i = 0;
-                while (status == NvStatus.OK)
-                {
-                    NvDisplayHandle dispHandle = new NvDisplayHandle();
-                    status = NVAPI.NvAPI_EnumNvidiaDisplayHandle(i, ref dispHandle);
-                    i++;
-
-                    if (status == NvStatus.OK)
-                    {
-                        uint countFromDisplay;
-                        NvPhysicalGpuHandle[] handlesFromDisplay = new NvPhysicalGpuHandle[NVAPI.MAX_PHYSICAL_GPUS];
-                        if (NVAPI.NvAPI_GetPhysicalGPUsFromDisplay(dispHandle, handlesFromDisplay, out countFromDisplay) == NvStatus.OK)
-                        {
-                            for (int j = 0; j < countFromDisplay; j++)
-                            {
-                                if (!displayHandles.ContainsKey(handlesFromDisplay[j]))
-                                {
-                                    displayHandles.Add(handlesFromDisplay[j], dispHandle);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (numGpus < 1)
-            {
-                throw new Exception("Unable to obtain primary GPU");
-            }
-
-            NvDisplayHandle displayHandle;
-            displayHandles.TryGetValue(handles[0], out displayHandle);
-            return new NvidiaGPU(0, handles[0], displayHandle);
-        }
-
-
         static void ShowUsage(OptionSet optionSet)
         {
-            Console.WriteLine("Usage: ProcPerfMon [OPTIONS]+ process");
-            Console.WriteLine("Run performance monitor on specified process.");
-            Console.WriteLine("By default this program logs to a file in parent directory for 1 minute.");
-            Console.WriteLine();
-            Console.WriteLine("Options:");
-            optionSet.WriteOptionDescriptions(Console.Out);
+
         }
 
         static void Main(string[] args)
@@ -137,8 +69,13 @@ namespace ProcPerfMon
 
 			if (showHelp)
 			{
-				ShowUsage(optionSet);
-				return;
+                Console.WriteLine("Usage: ProcPerfMon [OPTIONS]+ process");
+                Console.WriteLine("Run performance monitor on specified process.");
+                Console.WriteLine("By default this program logs to a file in parent directory for 1 minute.");
+                Console.WriteLine();
+                Console.WriteLine("Options:");
+                optionSet.WriteOptionDescriptions(Console.Out);
+                return;
 			}
 
 			// Allow user to select process from list if no process name was given
@@ -239,23 +176,26 @@ namespace ProcPerfMon
 
             // Obtain CPU and RAM usage performance counters for target process
             PerformanceCounter cpuCounter = new PerformanceCounter("Process", "% Processor Time", targetProcess.ProcessName);
-            PerformanceCounter ramCounter = new PerformanceCounter("Process", "Working Set", targetProcess.ProcessName);
+            PerformanceCounter ramCounter = new PerformanceCounter("Process", "Working Set - Private", targetProcess.ProcessName);
 
-            // Get GPU performance data
-            NvidiaGPU gpuCounter = GetPrimaryGPU();
+            Sensor cpuSensor = new CpuSensor(targetProcess);
+            Sensor ramSensor = new RamSensor(targetProcess);
+            Sensor gpuSensor = new GpuCoreSensor();
+            Sensor videoSensor = new GpuVideoSensor();
+            Sensor vramSensor = new GpuVramSensor();
 
             while (!Console.KeyAvailable)
             {
-                float cpuCounterValue = cpuCounter.NextValue();
-                float ramCounterValue = ramCounter.NextValue();
+                targetProcess.Refresh();
 
-                gpuCounter.Update();
+                Console.WriteLine("{0:-16}  {1:##0.000}", "CPU Load", cpuSensor.NextValue());
+                Console.WriteLine("{0:-16}  {1:##0.000}", "RAM Load", ramSensor.NextValue());
 
-                Console.WriteLine("{0:16}  {1:##0.000}", "GPU Load", cpuCounterValue);
-                Console.WriteLine("{0:16}  {1:##0.000}", "RAM Load", ramCounterValue);
-                Console.WriteLine("{0:16}  {1:##0.000}", gpuCounter.CoreLoad.Name, gpuCounter.CoreLoad.Value);
-                Console.WriteLine("{0:16}  {1:##0.000}", gpuCounter.VideoEngineLoad.Name, gpuCounter.VideoEngineLoad.Value);
-                Console.WriteLine("{0:16}  {1:##0.000}", gpuCounter.MemoryLoad.Name, gpuCounter.MemoryLoad.Value);
+                Console.WriteLine("{0:-16}  {1:##0.000}", gpuSensor.Name, gpuSensor.NextValue());
+                Console.WriteLine("{0:-16}  {1:##0.000}", videoSensor.Name, videoSensor.NextValue());
+                Console.WriteLine("{0:-16}  {1:##0.000}", vramSensor.Name, vramSensor.NextValue());
+
+                Console.WriteLine();
 
                 System.Threading.Thread.Sleep(200);
             }

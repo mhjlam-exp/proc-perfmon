@@ -9,7 +9,6 @@
  
 */
 
-using ProcPerfMon.Hardware;
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -115,12 +114,12 @@ namespace ProcPerfMon.Nvidia {
   }
 
   [StructLayout(LayoutKind.Sequential)]
-  internal struct NvDisplayHandle {
+  public struct NvDisplayHandle {
     private readonly IntPtr ptr;
   }
 
   [StructLayout(LayoutKind.Sequential)]
-  internal struct NvPhysicalGpuHandle {
+  public struct NvPhysicalGpuHandle {
     private readonly IntPtr ptr;
   }
 
@@ -132,13 +131,13 @@ namespace ProcPerfMon.Nvidia {
   }
 
   [StructLayout(LayoutKind.Sequential, Pack = 8)]
-  internal struct NvPState {
+  public struct NvPState {
     public bool Present;
     public int Percentage;
   }
 
   [StructLayout(LayoutKind.Sequential, Pack = 8)]
-  internal struct NvPStates {
+public struct NvPStates {
     public uint Version;
     public uint Flags;
     [MarshalAs(UnmanagedType.ByValArray, SizeConst = NVAPI.MAX_PSTATES_PER_GPU)]

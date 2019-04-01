@@ -14,13 +14,12 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.InteropServices;
 
-namespace ProcPerfMon.Hardware
+namespace ProcPerfMon.Nvidia
 {
     internal static class PInvokeDelegateFactory
     {
         private static readonly ModuleBuilder moduleBuilder = 
-          AppDomain.CurrentDomain.DefineDynamicAssembly(new AssemblyName("PInvokeDelegateFactoryInternalAssembly"), 
-              AssemblyBuilderAccess.Run).DefineDynamicModule("PInvokeDelegateFactoryInternalModule");
+            AppDomain.CurrentDomain.DefineDynamicAssembly(new AssemblyName("PInvokeDelegateFactoryInternalAssembly"), AssemblyBuilderAccess.Run).DefineDynamicModule("PInvokeDelegateFactoryInternalModule");
 
         private static readonly IDictionary<Tuple<DllImportAttribute, Type>, Type> wrapperTypes = new Dictionary<Tuple<DllImportAttribute, Type>, Type>();
 
