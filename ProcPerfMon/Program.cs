@@ -79,10 +79,9 @@ namespace ProcPerfMon
 			}
 
 			// Allow user to select process from list if no process name was given
-			int selection = 0;
-			Process targetProcess;
-
             List<Process> processes = new List<Process>();
+			List<Process> allProcesses = Process.GetProcesses().ToList();
+
             foreach (Process process in Process.GetProcesses().Where(p => p.MainWindowTitle.Length > 0).OrderBy(p => p.ProcessName).ToList())
             {
                 try
@@ -93,6 +92,7 @@ namespace ProcPerfMon
                 catch (Exception) { }
             }
 
+			int selection = 0;
 			if (nonOptionalArgs.Count == 0)
 			{
 				Console.WriteLine("Select the target process to monitor:");
@@ -130,13 +130,7 @@ namespace ProcPerfMon
 			}
 
 			// Make sure that process is currently running
-			List<Process> matchingProcesses = processes.FindAll(x => x.ProcessName == processName);
-
-			if (matchingProcesses.Any(p => p.MainWindowTitle.Length == 0))
-			{
-				Console.WriteLine($"Access is denied to target process {processName}.");
-				return;
-			}
+			List<Process> matchingProcesses = allProcesses.FindAll(x => x.ProcessName == processName);
 
 			if (matchingProcesses.Count == 0)
 			{
@@ -144,49 +138,19 @@ namespace ProcPerfMon
 				return;
 			}
 
-			// Ask for more input if more than one process with target name is running
-			selection = 0;
-			if (matchingProcesses.Count > 1)
-			{
-				Console.WriteLine("More than one process with the specified name is currently running. Select the target process to monitor:");
-
-				for (i = 0; i < matchingProcesses.Count; ++i)
-				{
-					Console.WriteLine("[{0,2}]  {1,12}  {2,32}", i+1, matchingProcesses[i].ProcessName, matchingProcesses[i].MainModule.FileName);
-				}
-
-				ConsoleKeyInfo cki = Console.ReadKey(true);
-				if (char.IsNumber(cki.KeyChar))
-				{
-					selection = int.Parse(cki.KeyChar.ToString()) - 1;
-					if (selection > matchingProcesses.Count)
-					{
-						Console.WriteLine("Invalid input.");
-						return;
-					}
-				}
-				else
-				{
-					Console.WriteLine("Invalid input, aborting.");
-					return;
-				}
-			}
-
-			targetProcess = matchingProcesses[selection];
-
-            // Obtain CPU and RAM usage performance counters for target process
-            PerformanceCounter cpuCounter = new PerformanceCounter("Process", "% Processor Time", targetProcess.ProcessName);
-            PerformanceCounter ramCounter = new PerformanceCounter("Process", "Working Set - Private", targetProcess.ProcessName);
-
-            Sensor cpuSensor = new CpuSensor(targetProcess);
-            Sensor ramSensor = new RamSensor(targetProcess);
+            // Obtain sensors for target process
+            Sensor cpuSensor = new CpuSensor(matchingProcesses);
+            Sensor ramSensor = new RamSensor(matchingProcesses);
             Sensor gpuSensor = new GpuCoreSensor();
             Sensor videoSensor = new GpuVideoSensor();
             Sensor vramSensor = new GpuVramSensor();
 
             while (!Console.KeyAvailable)
             {
-                targetProcess.Refresh();
+				foreach (Process process in matchingProcesses)
+				{
+					process.Refresh();
+				}
 
                 Console.WriteLine("{0:-16}  {1:##0.000}", "CPU Load", cpuSensor.NextValue());
                 Console.WriteLine("{0:-16}  {1:##0.000}", "RAM Load", ramSensor.NextValue());
