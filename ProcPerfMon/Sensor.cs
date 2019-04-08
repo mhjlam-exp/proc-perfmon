@@ -39,23 +39,35 @@ namespace ProcPerfMon
 
     public class CpuSensor : Sensor
     {
-        private readonly PerformanceCounter counter;
+        private readonly List<PerformanceCounter> counters;
 
-        public CpuSensor(Process process)
+        public CpuSensor(List<Process> processes)
         {
             Name = "CPU Load";
-            counter = new PerformanceCounter("Process", "% Processor Time", process.ProcessName);
+
+			counters = new List<PerformanceCounter>();
+			foreach (Process process in processes)
+			{
+				counters.Add(new PerformanceCounter("Process", "% Processor Time", process.ProcessName));
+			}
         }
 
         public override float NextValue()
         {
-            return counter.NextValue() / Environment.ProcessorCount;
+			float cpuUsage = 0;
+
+			foreach (PerformanceCounter counter in counters)
+			{
+				cpuUsage += counter.NextValue() / Environment.ProcessorCount;
+			}
+
+			return cpuUsage;
         }
     }
 
     public class RamSensor : Sensor
     {
-        private readonly PerformanceCounter counter;
+        private readonly List<PerformanceCounter> counters;
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
         private class MemoryStatusEx
@@ -75,11 +87,16 @@ namespace ProcPerfMon
         [return: MarshalAs(UnmanagedType.Bool)]
         static extern bool GlobalMemoryStatusEx([In, Out] MemoryStatusEx buffer);
 
-        public RamSensor(Process process)
+        public RamSensor(List<Process> processes)
         {
             Name = "RAM Load";
-            counter = new PerformanceCounter("Process", "Working Set - Private", process.ProcessName);
-        }
+
+			counters = new List<PerformanceCounter>();
+			foreach (Process process in processes)
+			{
+				counters.Add(new PerformanceCounter("Process", "Working Set - Private", process.ProcessName));
+			}
+		}
 
         public override float NextValue()
         {
@@ -89,9 +106,15 @@ namespace ProcPerfMon
             };
 
             float totalRAM = GlobalMemoryStatusEx(status) ? (status.ullTotalPhys / (1024 * 1024)) : 1;
-            float ramUsage = counter.NextValue() / (1024 * 1024) / totalRAM * 100f;  // RAM usage in percentage of total
 
-            return ramUsage;
+			float ramUsage = 0;
+			foreach (PerformanceCounter counter in counters)
+			{
+				ramUsage += (counter.NextValue() / (1024 * 1024));
+			}
+
+			return ramUsage;
+			//return ramUsage / totalRAM * 100f;  // RAM usage in percentage of total
         }
     }
 
