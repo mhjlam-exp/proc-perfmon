@@ -1,60 +1,71 @@
 ﻿using Mono.Options;
-using ProcPerfMon.Nvidia;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 
 namespace ProcPerfMon
 {
     public class Program
     {
-        static void ShowUsage(OptionSet optionSet)
-        {
+        private static StreamWriter writer;
 
+        private static void Log(string message, bool writeToConsole = false)
+        {
+            writer.WriteLine(message);
+
+            if (writeToConsole)
+            {
+                Console.WriteLine(message);
+            }
         }
 
         static void Main(string[] args)
         {
-            // Obtain "Process" performance counter category (since this is slow it is done at startup)
-            //List<PerformanceCounterCategory> categories = PerformanceCounterCategory.GetCategories().ToList();
-
-            int logDuration = 60;
 			bool showHelp = false;
-			string processName = "devenv";
-			string logFile = DateTime.Now.ToString($"{processName}-yyyyMMdd_HHmmss");
+            bool verbose = false;
+
+            TimeSpan timeRemaining;
+            DateTime startLogTime = new DateTime();
+            DateTime lastLoggedTime = DateTime.MinValue;
+            TimeSpan logDuration = new TimeSpan(0, 0, 60);
+            TimeSpan logInterval = new TimeSpan(0, 0, 0, 0, 100);
+
+            string processName = "devenv";
+			string logFileName = processName + DateTime.Now.ToString($"yyyyMMdd_HHmmss");
 			List<string> nonOptionalArgs = new List<string>();
 
-			int i = 1;
-			while (File.Exists(logFile))
+			int j = 1;
+			while (File.Exists(logFileName))
 			{
-				logFile = Path.GetFileNameWithoutExtension(logFile) + $"-{i++}";
+				logFileName = Path.GetFileNameWithoutExtension(logFileName) + $"-{j++}";
 			}
 
-			OptionSet optionSet = new OptionSet()
-			{
-				{ "p|process", "Name of the process to monitor.", p => processName = p },
-				{ "d|duration", "Duration of the session (in seconds).", (int d) => logDuration = d },
-				{ "l|logfile", "Location and name of the log file.", l => logFile = l },
-				{ "h|help",  "Show this message and exit.", v => showHelp = v != null },
+            OptionSet optionSet = new OptionSet()
+            {
+                { "p=|process", "Name of the process to monitor.", p => processName = p },
+                { "d=|duration", "Duration of the session (in seconds).", (int d) => logDuration = new TimeSpan(0, 0, d) },
+                { "i=|interval", "Interval between recording steps (in milliseconds)", (int i) => logInterval = new TimeSpan(0, 0, 0, 0, i) },
+				{ "l=|logfile", "Location and name of the log file.", l => logFileName = l },
+                { "v=|verbose", "Print logging output to screen.", (bool v) => verbose = v },
+				{ "h|help",  "Show this message and exit.", v => showHelp = v != null }
 			};
 
-			try
+            try
 			{
-				FileInfo fileInfo = new FileInfo(logFile);
+				FileInfo fileInfo = new FileInfo(logFileName);
 			}
 			catch (Exception e)
 			{
-				Console.WriteLine($"Invalid log file {logFile}: {e.Message}");
+				Console.Error.WriteLine($"Invalid log file {logFileName}: {e.Message}");
 				return;
 			}
 
 			// Append .log extension to specified log file if necessary
-			if (Path.GetExtension(logFile) != ".log")
+			if (Path.GetExtension(logFileName) != ".csv")
 			{
-				logFile += ".log";
+				logFileName += ".csv";
 			}
 
 			try
@@ -63,7 +74,7 @@ namespace ProcPerfMon
 			}
 			catch (OptionException e)
 			{
-				Console.WriteLine($"Invalid arguments: {e.Message}");
+                Console.Error.WriteLine($"Invalid arguments: {e.Message}");
 				return;
 			}
 
@@ -79,7 +90,7 @@ namespace ProcPerfMon
 			}
 
 			// Allow user to select process from list if no process name was given
-			int selection = 0;
+			uint selection = 0;
 			Process targetProcess;
 
             List<Process> processes = new List<Process>();
@@ -90,14 +101,14 @@ namespace ProcPerfMon
                     ProcessModule processModule = process.MainModule;
                     processes.Add(process);
                 }
-                catch (Exception) { }
+                catch (Exception) {}
             }
 
 			if (nonOptionalArgs.Count == 0)
 			{
 				Console.WriteLine("Select the target process to monitor:");
 
-				for (i = 0; i < processes.Count; ++i)
+				for (int i = 0; i < processes.Count; ++i)
 				{
                     try
                     {
@@ -106,25 +117,22 @@ namespace ProcPerfMon
                     catch (Exception) {}
 				}
 
-				ConsoleKeyInfo cki = Console.ReadKey(true);
-				if (char.IsNumber(cki.KeyChar))
-				{
-					selection = int.Parse(cki.KeyChar.ToString()) - 1;
-					if (selection > processes.Count)
-					{
-						Console.WriteLine("Invalid input.");
-						return;
-					}
+                string selectionString = Console.ReadLine();
+                if (!uint.TryParse(selectionString, out selection))
+                {
+                    Console.Error.WriteLine("Invalid input.");
+                    return;
+                }
 
-					processName = processes[selection].ProcessName;
-				}
-				else
-				{
-					Console.WriteLine("Invalid input, aborting.");
-					return;
-				}
-			}
-			else if (nonOptionalArgs.Count > 0)
+                if (selection > processes.Count)
+                {
+                    Console.Error.WriteLine("Invalid input.");
+                    return;
+                }
+
+                processName = processes[(int)selection-1].ProcessName;
+            }
+            else if (nonOptionalArgs.Count > 0)
 			{
 				processName = nonOptionalArgs[0];
 			}
@@ -134,13 +142,13 @@ namespace ProcPerfMon
 
 			if (matchingProcesses.Any(p => p.MainWindowTitle.Length == 0))
 			{
-				Console.WriteLine($"Access is denied to target process {processName}.");
+				Console.Error.WriteLine($"Access is denied to target process {processName}.");
 				return;
 			}
 
 			if (matchingProcesses.Count == 0)
 			{
-				Console.WriteLine($"Target process {processName} is not currently running.");
+                Console.Error.WriteLine($"Target process {processName} is not currently running.");
 				return;
 			}
 
@@ -150,7 +158,7 @@ namespace ProcPerfMon
 			{
 				Console.WriteLine("More than one process with the specified name is currently running. Select the target process to monitor:");
 
-				for (i = 0; i < matchingProcesses.Count; ++i)
+				for (int i = 0; i < matchingProcesses.Count; ++i)
 				{
 					Console.WriteLine("[{0,2}]  {1,12}  {2,32}", i+1, matchingProcesses[i].ProcessName, matchingProcesses[i].MainModule.FileName);
 				}
@@ -158,46 +166,78 @@ namespace ProcPerfMon
 				ConsoleKeyInfo cki = Console.ReadKey(true);
 				if (char.IsNumber(cki.KeyChar))
 				{
-					selection = int.Parse(cki.KeyChar.ToString()) - 1;
+					selection = uint.Parse(cki.KeyChar.ToString()) - 1;
 					if (selection > matchingProcesses.Count)
 					{
-						Console.WriteLine("Invalid input.");
+                        Console.Error.WriteLine("Invalid input.");
 						return;
 					}
 				}
 				else
 				{
-					Console.WriteLine("Invalid input, aborting.");
+                    Console.Error.WriteLine("Invalid input, aborting.");
 					return;
 				}
 			}
 
-			targetProcess = matchingProcesses[selection];
+			targetProcess = matchingProcesses[(int)selection];
+            processName = targetProcess.ProcessName;
 
-            // Obtain CPU and RAM usage performance counters for target process
-            PerformanceCounter cpuCounter = new PerformanceCounter("Process", "% Processor Time", targetProcess.ProcessName);
-            PerformanceCounter ramCounter = new PerformanceCounter("Process", "Working Set - Private", targetProcess.ProcessName);
-
-            Sensor cpuSensor = new CpuSensor(targetProcess);
-            Sensor ramSensor = new RamSensor(targetProcess);
-            Sensor gpuSensor = new GpuCoreSensor();
-            Sensor videoSensor = new GpuVideoSensor();
-            Sensor vramSensor = new GpuVramSensor();
-
-            while (!Console.KeyAvailable)
+            // Obtain load sensors for target process
+            List<Sensor> sensors = new List<Sensor>
             {
+                new CpuSensor(targetProcess),
+                new RamSensor(targetProcess),
+                new GpuCoreSensor(),
+                new GpuVideoSensor(),
+                new GpuVramSensor()
+            };
+
+            DateTime now = DateTime.Now;
+            startLogTime = now;
+            logFileName = string.Format("ProcPerfMon-{0}-{1:yyyyMMdd_HHmmss}.csv", processName, now);
+
+            bool fileExists = File.Exists(logFileName);
+            writer = new StreamWriter(new FileStream(logFileName, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite));
+
+            if (!fileExists)
+            {
+                // Log header
+                Log("\"Timestamp\",\"" + string.Join(",", sensors.Select(s => s.Name)), verbose);
+            }
+
+            while (now - startLogTime < logDuration)
+            {
+                // Exit if process ends during monitoring
+                if (targetProcess.HasExited)
+                {
+                    writer.Flush();
+                    break;
+                }
+
+                // End when time logging duration has passed
+                timeRemaining = logDuration - (now - startLogTime);
+                if (timeRemaining <= TimeSpan.Zero)
+                {
+                    break;
+                }
+
+                // Wait until specified interval has passed before continuing
+                if ((lastLoggedTime + logInterval - new TimeSpan(1000000)) > now)
+                {
+                    continue;
+                }
+
+                // Get new counter values for target process
                 targetProcess.Refresh();
 
-                Console.WriteLine("{0:-16}  {1:##0.000}", "CPU Load", cpuSensor.NextValue());
-                Console.WriteLine("{0:-16}  {1:##0.000}", "RAM Load", ramSensor.NextValue());
+                // Log sensor data
+                Log("\"" + now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "\"," + string.Join(",", sensors.Select(s => "\"" + s.NextValue() + "\"")), verbose);
 
-                Console.WriteLine("{0:-16}  {1:##0.000}", gpuSensor.Name, gpuSensor.NextValue());
-                Console.WriteLine("{0:-16}  {1:##0.000}", videoSensor.Name, videoSensor.NextValue());
-                Console.WriteLine("{0:-16}  {1:##0.000}", vramSensor.Name, vramSensor.NextValue());
+                lastLoggedTime = now;
+                now = DateTime.Now;
 
-                Console.WriteLine();
-
-                System.Threading.Thread.Sleep(200);
+                writer.Flush();
             }
         }
     }

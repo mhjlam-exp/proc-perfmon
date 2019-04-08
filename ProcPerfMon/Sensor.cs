@@ -268,7 +268,7 @@ namespace ProcPerfMon
                 uint freeMemory = memoryInfo.Values[4];
                 float usedMemory = Math.Max(totalMemory - freeMemory, 0);
 
-                return 100f * usedMemory / totalMemory;
+                return usedMemory / totalMemory * 100f;
             }
 
             return 0;
