@@ -39,82 +39,64 @@ namespace ProcPerfMon
 
     public class CpuSensor : Sensor
     {
-        private readonly List<PerformanceCounter> counters;
+        private readonly PerformanceCounter counter;
 
-        public CpuSensor(List<Process> processes)
+        public CpuSensor(Process process)
         {
             Name = "CPU Load";
-
-			counters = new List<PerformanceCounter>();
-			foreach (Process process in processes)
-			{
-				counters.Add(new PerformanceCounter("Process", "% Processor Time", process.ProcessName));
-			}
+            counter = new PerformanceCounter("Process", "% Processor Time", process.ProcessName);
         }
 
         public override float NextValue()
         {
-			float cpuUsage = 0;
-
-			foreach (PerformanceCounter counter in counters)
-			{
-				cpuUsage += counter.NextValue() / Environment.ProcessorCount;
-			}
-
-			return cpuUsage;
+			return counter.NextValue() / Environment.ProcessorCount;
         }
     }
 
     public class RamSensor : Sensor
     {
-        private readonly List<PerformanceCounter> counters;
+        private readonly PerformanceCounter counter;
+
+        public float TotalRam
+        {
+            private set;
+            get;
+        }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
         private class MemoryStatusEx
         {
-            public uint dwLength;
-            public uint dwMemoryLoad;
-            public ulong ullTotalPhys;
-            public ulong ullAvailPhys;
-            public ulong ullTotalPageFile;
-            public ulong ullAvailPageFile;
-            public ulong ullTotalVirtual;
-            public ulong ullAvailVirtual;
-            public ulong ullAvailExtendedVirtual;
+            public uint Length;
+            public uint MemoryLoad;
+            public ulong TotalPhys;
+            public ulong AvailPhys;
+            public ulong TotalPageFile;
+            public ulong AvailPageFile;
+            public ulong TotalVirtual;
+            public ulong AvailVirtual;
+            public ulong AvailExtendedVirtual;
         }
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         static extern bool GlobalMemoryStatusEx([In, Out] MemoryStatusEx buffer);
 
-        public RamSensor(List<Process> processes)
+        public RamSensor(Process process)
         {
             Name = "RAM Load";
+            counter = new PerformanceCounter("Process", "Working Set - Private", process.ProcessName);
 
-			counters = new List<PerformanceCounter>();
-			foreach (Process process in processes)
-			{
-				counters.Add(new PerformanceCounter("Process", "Working Set - Private", process.ProcessName));
-			}
-		}
+            MemoryStatusEx status = new MemoryStatusEx
+            {
+                Length = checked((uint)Marshal.SizeOf(typeof(MemoryStatusEx)))
+            };
+
+            TotalRam = GlobalMemoryStatusEx(status) ? (status.TotalPhys / (1024 * 1024)) : 1f;
+        }
 
         public override float NextValue()
         {
-            MemoryStatusEx status = new MemoryStatusEx
-            {
-                dwLength = checked((uint)Marshal.SizeOf(typeof(MemoryStatusEx)))
-            };
-
-            float totalRAM = GlobalMemoryStatusEx(status) ? (status.ullTotalPhys / (1024 * 1024)) : 1;
-
-			float ramUsage = 0;
-			foreach (PerformanceCounter counter in counters)
-			{
-				ramUsage += (counter.NextValue() / (1024 * 1024));
-			}
-
-			return ramUsage;
-			//return ramUsage / totalRAM * 100f;  // RAM usage in percentage of total
+			return counter.NextValue() / (1024 * 1024); // usage in MB
         }
     }
 
@@ -271,9 +253,30 @@ namespace ProcPerfMon
 
     public class GpuVramSensor : GpuSensor
     {
+        public float TotalVram // VRAM in MB
+        {
+            private set;
+            get;
+        }
+
         public GpuVramSensor()
         {
             Name = "GPU Memory Load";
+
+            NvMemoryInfo memoryInfo = new NvMemoryInfo
+            {
+                Version = NVAPI.GPU_MEMORY_INFO_VER,
+                Values = new uint[NVAPI.MAX_MEMORY_VALUES_PER_GPU]
+            };
+
+            if (NVAPI.NvAPI_GPU_GetMemoryInfo != null && NVAPI.NvAPI_GPU_GetMemoryInfo(displayHandle, ref memoryInfo) == NvStatus.OK)
+            {
+                TotalVram = memoryInfo.Values[0] / 1024f;
+            }
+            else
+            {
+                TotalVram = 1f;
+            }
         }
 
         public override float NextValue()
@@ -287,11 +290,8 @@ namespace ProcPerfMon
 
             if (NVAPI.NvAPI_GPU_GetMemoryInfo != null && NVAPI.NvAPI_GPU_GetMemoryInfo(displayHandle, ref memoryInfo) == NvStatus.OK)
             {
-                uint totalMemory = memoryInfo.Values[0];
-                uint freeMemory = memoryInfo.Values[4];
-                float usedMemory = Math.Max(totalMemory - freeMemory, 0);
-
-                return usedMemory / totalMemory * 100f;
+                uint freeMemory = memoryInfo.Values[4] / 1024;
+                return Math.Max((uint)TotalVram - freeMemory, 0);
             }
 
             return 0;
